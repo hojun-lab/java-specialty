@@ -58,20 +58,28 @@ int main(void)
             break;
         case 7: // CONSTANT_class
             fread(skip, 1, 2, file);
-            printf("#%d Class\n", i);
+            int name_index = (skip[0] << 8) | skip[1];
+            printf("#%d Class #%d\n", i, name_index);
             break;
         case 8: // CONSTANT_String
             fread(skip, 1, 2, file);
-            printf("#%d String\n", i);
+            int string_index = (skip[0] << 8) | skip[1];
+            printf("#%d String #%d\n", i, string_index);
             break;
         case 9:  // CONSTANT_Fieldref
         case 10: // CONSTANT_Methodref
-            fread(skip, 1, 4, file);
-            printf("#%d Methodref\n", i);
+            fread(skip, 1, 2, file);
+            int fieldref = (skip[0] << 8) | skip[1];
+            fread(skip, 1, 2, file);
+            int methodref = (skip[0] << 8) | skip[1];
+            printf("#%d Methodref #%d.#%d\n", i, fieldref, methodref);
             break;
         case 12: // NameAndType
-            fread(skip, 1, 4, file);
-            printf("#%d NameAndType\n", i);
+            fread(skip, 1, 2, file);
+            int name_idx = (skip[0] << 8) | skip[1];
+            fread(skip, 1, 2, file);
+            int desc_idx = (skip[0] << 8) | skip[1];
+            printf("#%d NameAndType #%d:#%d\n", i, name_idx, desc_idx);
             break;
         case 15: // MethodHandle
             fread(skip, 1, 3, file);
