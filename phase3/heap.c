@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
 typedef struct
 {
     char *start;
@@ -86,37 +88,145 @@ void gc_sweep(Heap *heap)
     }
 }
 
+void minor_gc(Heap *eden, Heap *from, Heap *to, Heap *old_gen,
+              Object **roots, int root_count)
+{
+    printf("\n=== Minor GC Start ===\n");
+    for (int i = 0; i < root_count; i++)
+    {
+        gc_mark(roots[i]);
+    }
+
+    char *ptr = eden->start;
+    while (ptr < eden->alloc_ptr)
+    {
+        Object *obj = (Object *)ptr;
+
+        int tenuring_threshold = 3;
+        if (obj->gc_marked)
+        {
+            Object *new_obj;
+            if (obj->gc_age + 1 >= tenuring_threshold)
+            {
+                new_obj = heap_alloc(old_gen, obj->size - sizeof(Object));
+                printf("  [PROMOTE] age=%d → Old Gen\n", obj->gc_age + 1);
+            }
+            else
+            {
+                new_obj = heap_alloc(to, obj->size - sizeof(Object));
+                if (new_obj == NULL)
+                {
+                    new_obj = heap_alloc(old_gen, obj->size - sizeof(Object));
+                    printf("  [PROMOTE] Survivor full! → Old Gen\n");
+                }
+                else
+                {
+                    printf("  [COPY] age=%d → Survivor\n", obj->gc_age + 1);
+                }
+            }
+
+            memcpy(new_obj, obj, obj->size);
+            new_obj->gc_marked = 0;
+            new_obj->gc_age++;
+
+            for (int r = 0; r < root_count; r++)
+            {
+                if (roots[r] == obj)
+                {
+                    roots[r] = new_obj;
+                }
+            }
+
+            printf("  [COPY] age=%d, size=%d → Survivor\n", new_obj->gc_age, obj->size);
+        }
+        ptr = ptr + obj->size;
+    }
+
+    ptr = from->start;
+    while (ptr < from->alloc_ptr)
+    {
+        Object *obj = (Object *)ptr;
+
+        int tenuring_threshold = 3;
+        if (obj->gc_marked)
+        {
+            Object *new_obj;
+            if (obj->gc_age + 1 >= tenuring_threshold)
+            {
+                new_obj = heap_alloc(old_gen, obj->size - sizeof(Object));
+                printf("  [PROMOTE] age=%d → Old Gen\n", obj->gc_age + 1);
+            }
+            else
+            {
+                new_obj = heap_alloc(to, obj->size - sizeof(Object));
+                if (new_obj == NULL)
+                {
+                    new_obj = heap_alloc(old_gen, obj->size - sizeof(Object));
+                    printf("  [PROMOTE] Survivor full! → Old Gen\n");
+                }
+                else
+                {
+                    printf("  [COPY] age=%d → Survivor\n", obj->gc_age + 1);
+                }
+            }
+
+            memcpy(new_obj, obj, obj->size);
+            new_obj->gc_marked = 0;
+            new_obj->gc_age++;
+
+            for (int r = 0; r < root_count; r++)
+            {
+                if (roots[r] == obj)
+                {
+                    roots[r] = new_obj;
+                }
+            }
+
+            printf("  [COPY] age=%d, size=%d → Survivor\n", new_obj->gc_age, obj->size);
+        }
+        ptr = ptr + obj->size;
+    }
+
+    eden->alloc_ptr = eden->start;
+    eden->used = 0;
+    from->alloc_ptr = from->start;
+    from->used = 0;
+
+    printf("=== Minor GC End ===\n");
+}
+
 int main(void)
 {
-    Heap heap;
-    heap_init(&heap, 1024);
+    Heap eden, survivor0, survivor1, old_gen;
+    heap_init(&eden, 512);
+    heap_init(&survivor0, 256);
+    heap_init(&survivor1, 256);
+    heap_init(&old_gen, 512);
 
-    Object *a = heap_alloc(&heap, 32);
-    Object *b = heap_alloc(&heap, 32);
-    Object *c = heap_alloc(&heap, 32);
-    Object *d = heap_alloc(&heap, 32); // 아무도 참조 안 하는 객체!
+    Heap *from = &survivor0;
+    Heap *to = &survivor1;
 
-    object_add_ref(a, b); // a → b
-    object_add_ref(a, c); // a → c
-
-    printf("a refs: %d\n", a->ref_count); // 2
-    printf("b refs: %d\n", b->ref_count); // 0
-    printf("c refs: %d\n", c->ref_count); // 0
-
-    gc_mark(a); // a에서 시작해서 b, c까지 마킹
-
-    printf("a marked: %d\n", a->gc_marked); // 1
-    printf("b marked: %d\n", b->gc_marked); // 1
-    printf("c marked: %d\n", c->gc_marked); // 1
+    // Eden 에 객체 할당
+    Object *a = heap_alloc(&eden, 32);
+    Object *b = heap_alloc(&eden, 32);
+    Object *c = heap_alloc(&eden, 32); // 참조 안됨 -> GC 대상
 
     object_add_ref(a, b);
-    object_add_ref(a, c);
-    // d는 참조 안 함!
 
-    printf("=== GC Start ===\n");
-    gc_mark(a);      // a, b, c만 마킹됨
-    gc_sweep(&heap); // d는 마킹 안 됨 → 수거!
-    printf("=== GC End ===\n");
+    Object *roots[] = {a};
+    for (int i = 0; i < 3; i++)
+    {
+        minor_gc(&eden, from, to, &old_gen, roots, 1);
+        Heap *temp = from;
+        from = to;
+        to = temp;
+    }
+
+    printf("=== Before Minor GC ===\n");
+    printf("Eden used: %d / %d\n", eden.used, eden.total_size);
+    printf("Survivor0 used: %d / %d\n", survivor0.used, survivor0.total_size);
+    printf("Survivor1 used: %d / %d\n", survivor1.used, survivor1.total_size);
+    printf("Old used: %d / %d\n", old_gen.used, old_gen.total_size);
 
     return 0;
 }
