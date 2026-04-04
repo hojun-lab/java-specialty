@@ -6,11 +6,25 @@
 typedef struct
 {
     char name[256];
+    char descriptor[256]; // 예: "(Ljava/lang/String;)V"
+} MethodInfo;
+
+typedef struct
+{
+    char name[256];
     int method_count;
+    MethodInfo methods[32];
     int field_count;
     unsigned char *bytecode;
     int bytecode_length;
 } ClassFile;
+
+typedef struct ClassLoader
+{
+    char name[64];
+    char classpath[256];
+    struct ClassLoader *parent;
+} ClassLoader;
 
 ClassFile *class_table[MAX_CLASSES];
 int class_count = 0;
@@ -82,19 +96,76 @@ ClassFile *load_and_register_class(const char *name)
     return cf;
 }
 
+MethodInfo *resolve_method(const char *class_name, const char *method_name, const char *descriptor)
+{
+    ClassFile *classFile = find_class(class_name);
+    if (classFile == NULL)
+    {
+        return NULL;
+    }
+
+    for (int i = 0; i < classFile->method_count; i++)
+    {
+        if (strcmp(classFile->methods[i].name, method_name) == 0)
+        {
+            return &classFile->methods[i];
+        }
+    }
+
+    printf("NoSuchMethodError: %s.%s\n", class_name, method_name);
+    return NULL;
+}
+
+ClassFile *classloader_load(ClassLoader *loader, const char *name)
+{
+    ClassFile *cls = find_class(name);
+    if (cls != NULL)
+    {
+        return cls;
+    }
+
+    if (loader->parent != NULL)
+    {
+        cls = classloader_load(loader->parent, name);
+        if (cls != NULL)
+        {
+            return cls;
+        }
+    }
+
+    printf("[%s] searching: %s\n", loader->name, name);
+    char path[512];
+    sprintf(path, "%s%s", loader->classpath, name);
+
+    cls = load_class(path);
+    if (cls != NULL)
+    {
+        class_table[class_count] = cls;
+        class_count++;
+        return cls;
+    }
+
+    return NULL;
+}
+
 int main(void)
 {
-    ClassFile *cls = load_and_register_class("Hello.class");
-    // if (cls != NULL)
-    // {
-    //     printf("Class name: %s\n", cls->name);
-    // }
+    ClassLoader bootstrap = {"bootstrap", "/system/", NULL};
+    ClassLoader app = {"app", "./", &bootstrap};
 
-    ClassFile *cls2 = load_and_register_class("Hello.class");
+    // CNFE: 동적 로딩 시도 — 없는 클래스를 직접 요청
+    printf("=== Test 1: CNFE ===\n");
+    ClassFile *plugin = classloader_load(&app, "MyPlugin.class");
+    if (plugin == NULL)
+        printf("→ Caught: ClassNotFoundException\n");
 
-    // 없는 클래스도 테스트!
-    ClassFile *cls3 = load_and_register_class("NotExist.class");
+    // NCDFE: 있어야 하는 클래스가 없음
+    printf("\n=== Test 2: NCDFE ===\n");
+    ClassFile *hello = classloader_load(&app, "Hello.class");
+    // Hello가 참조하는 클래스를 resolve하려는데 없음!
+    MethodInfo *m = resolve_method("Missing.class", "doSomething", "()V");
+    if (m == NULL)
+        printf("→ Caught: NoClassDefFoundError (Missing was expected)\n");
 
-    printf("\nClass table: %d classes loaded\n", class_count);
     return 0;
 }

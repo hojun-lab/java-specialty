@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct
 {
@@ -88,9 +89,26 @@ void gc_sweep(Heap *heap)
     }
 }
 
+void gc_report(int eden_before, int eden_after, int eden_total,
+               int s_before, int s_after, int s_total,
+               int old_before, int old_after, int old_total,
+               int promoted, int collected, double elapsed_ms)
+{
+    printf("[GC (Allocation Failure) %.4fms]\n", elapsed_ms);
+    printf("  [Eden: %dB->%dB(%dB)]\n", eden_before, eden_after, eden_total);
+    printf("  [Survivor: %dB->%dB(%dB)]\n", s_before, s_after, s_total);
+    printf("  [Old: %dB->%dB(%dB)]\n", old_before, old_after, old_total);
+    printf("  [Promoted: %dB] [Collected: %dB]\n", promoted, collected);
+}
+
 void minor_gc(Heap *eden, Heap *from, Heap *to, Heap *old_gen,
               Object **roots, int root_count)
 {
+    clock_t start = clock();
+    int eden_before = eden->used;
+    int s_before = from->used;
+    int old_before = old_gen->used;
+
     printf("\n=== Minor GC Start ===\n");
     for (int i = 0; i < root_count; i++)
     {
@@ -193,6 +211,19 @@ void minor_gc(Heap *eden, Heap *from, Heap *to, Heap *old_gen,
     from->used = 0;
 
     printf("=== Minor GC End ===\n");
+
+    clock_t end = clock();
+    double elapsed = (double)(end - start) / CLOCKS_PER_SEC * 1000;
+
+    int collected = eden_before + s_before - to->used - (old_gen->used - old_before);
+
+    gc_report(
+        eden_before, eden->used, eden->total_size,
+        s_before, to->used, to->total_size,
+        old_before, old_gen->used, old_gen->total_size,
+        old_gen->used - old_before,
+        collected,
+        elapsed);
 }
 
 int main(void)
