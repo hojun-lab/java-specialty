@@ -15,19 +15,38 @@ typedef enum
     THREAD_TERMINATED
 } ThreadState;
 
-typedef struct
+typedef struct Monitor Monitor;
+typedef struct JVMThread JVMThread;
+
+struct Monitor
+{
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    JVMThread *owner;
+    int recursion_count;
+    JVMThread *waiting_threads[8]; // lock을 기다리는 스레드들
+    int waiting_count;
+};
+
+struct JVMThread
 {
     pthread_t pthread;
     char name[64];
     ThreadState state;
     int id;
-} JVMThread;
+    Monitor *waiting_for;
+};
+
+JVMThread *all_threads[64];
 
 JVMThread *jvm_thread_create(const char *name, void *(*func)(void *))
 {
     JVMThread *thread = malloc(sizeof(JVMThread));
     strcpy(thread->name, name);
-    thread->id = thread_count++;
+    thread->id = thread_count;
+    all_threads[thread_count] = thread;
+    thread_count++;
+    thread->waiting_for = NULL;
     thread->state = THREAD_NEW;
 
     pthread_create(&thread->pthread, NULL, func, thread);
@@ -46,16 +65,10 @@ void *thread_function(void *arg)
     return NULL;
 }
 
-typedef struct
-{
-    pthread_mutex_t mutex;
-    JVMThread *owner;
-    int recursion_count;
-} Monitor;
-
 void monitor_init(Monitor *mon)
 {
     pthread_mutex_init(&mon->mutex, NULL); // 초기화
+    pthread_cond_init(&mon->cond, NULL);
     mon->owner = NULL;
     mon->recursion_count = 0;
 }
@@ -63,8 +76,14 @@ void monitor_init(Monitor *mon)
 void monitor_lock(Monitor *mon, JVMThread *thread)
 {
     printf("[%s] waiting for lock...\n", thread->name);
-    thread->state = THREAD_BLOCKED;  // 대기 상태
+    thread->state = THREAD_BLOCKED;                      // 대기 상태
+    mon->waiting_threads[mon->waiting_count++] = thread; // 스레드 등록
+
+    thread->waiting_for = mon;
     pthread_mutex_lock(&mon->mutex); // 대기 실행 로직
+    thread->waiting_for = NULL;
+
+    mon->waiting_count--;            // 획득 했으니 대기 목록에서 제거
     thread->state = THREAD_RUNNABLE; // 획득
     mon->owner = thread;             // 주인 설정
     printf("[%s] acquired lock!\n", thread->name);
@@ -77,7 +96,25 @@ void monitor_unlock(Monitor *mon, JVMThread *thread)
     pthread_mutex_unlock(&mon->mutex); // 풀기
 }
 
+void monitor_wait(Monitor *mon, JVMThread *thread)
+{
+    thread->state = THREAD_WAITING;
+    mon->owner = NULL;
+    printf("[%s] waiting...\n", thread->name);
+    pthread_cond_wait(&mon->cond, &mon->mutex);
+    mon->owner = thread;
+    thread->state = THREAD_RUNNABLE;
+    printf("[%s] woke up!\n", thread->name);
+}
+
+void monitor_notify(Monitor *mon, JVMThread *thread)
+{
+    pthread_cond_signal(&mon->cond);
+}
+
 Monitor lock;
+Monitor lockA;
+Monitor lockB;
 
 void *worker(void *arg)
 {
@@ -91,16 +128,127 @@ void *worker(void *arg)
     return NULL;
 }
 
-int main(void)
+void *worker1(void *arg)
 {
-    monitor_init(&lock);
+    JVMThread *self = (JVMThread *)arg;
+    monitor_lock(&lockA, self);
+    printf("[%s] got lockA, trying lockB...\n", self->name);
+    sleep(1);
+    monitor_lock(&lockB, self);
+    monitor_unlock(&lockB, self);
+    monitor_unlock(&lockA, self);
+    return NULL;
+}
 
-    JVMThread *t1 = jvm_thread_create("http-handler-1", worker);
-    JVMThread *t2 = jvm_thread_create("http-handler-2", worker);
+void *worker2(void *arg)
+{
+    JVMThread *self = (JVMThread *)arg;
+    monitor_lock(&lockB, self);
+    printf("[%s] got lockB, trying lockA...\n", self->name);
+    sleep(1);
+    monitor_lock(&lockA, self);
+    monitor_unlock(&lockB, self);
+    monitor_unlock(&lockA, self);
+    return NULL;
+}
 
-    pthread_join(t1->pthread, NULL);
-    pthread_join(t2->pthread, NULL);
+void *deadlock_detector(void *arg)
+{
+    sleep(3);
+    printf("\n=== Deadlock Detection ===\n");
+    for (int i = 0; i < thread_count; i++)
+    {
+        JVMThread *t = all_threads[i];
+        if (t->waiting_for == NULL)
+            continue;
+        JVMThread *current = t;
+        for (int step = 0; step < thread_count; step++)
+        {
+            Monitor *mon = current->waiting_for;
+            if (mon == NULL || mon->owner == NULL)
+                break;
 
-    printf("\nAll threads finished.\n");
+            current = mon->owner;
+
+            if (current == t)
+            {
+                printf("DEADLOCK DETECTED!\n");
+                printf("  %s → %s → cycle!\n", t->name, current->name);
+                return NULL;
+            }
+        }
+    }
+
+    printf("No deadlock found.\n");
+    return NULL;
+}
+
+// int main(void)
+// {
+//     // monitor_init(&lock);
+//
+//     // JVMThread *t1 = jvm_thread_create("http-handler-1", worker);
+//     // JVMThread *t2 = jvm_thread_create("http-handler-2", worker);
+//
+//     // pthread_join(t1->pthread, NULL);
+//     // pthread_join(t2->pthread, NULL);
+//
+//     // printf("\nAll threads finished.\n");
+//     // return 0;
+//
+//     monitor_init(&lockA);
+//     monitor_init(&lockB);
+//
+//     JVMThread *t1 = jvm_thread_create("Thread-1", worker1);
+//     JVMThread *t2 = jvm_thread_create("Thread-2", worker2);
+//     JVMThread *detector = jvm_thread_create("detector", deadlock_detector);
+//
+//     pthread_join(t1->pthread, NULL);
+//     pthread_join(t2->pthread, NULL);
+//     pthread_join(detector->pthread, NULL);
+//
+//     printf("ALL THREADS FINISHED\n");
+//     return 0;
+// }
+
+Monitor queue_lock;
+int data_ready = 0;
+
+void* consumer(void *arg) {
+    JVMThread *self = (JVMThread *)arg;
+    monitor_lock(&queue_lock, self);
+
+    while (!data_ready) {
+        printf("[%s] no data, waiting...\n", self->name);
+        monitor_wait(&queue_lock, self);
+    }
+
+    printf("[%s] got data! processing!\n", self->name);
+    monitor_unlock(&queue_lock, self);
+    return NULL;
+}
+
+void* producer(void *arg) {
+    JVMThread *self = (JVMThread *)arg;
+    sleep(2);
+
+    monitor_lock(&queue_lock, self);
+    data_ready = 1;
+    printf("[%s] data produced! notifying...\n", self->name);
+    monitor_unlock(&queue_lock, self);
+    monitor_notify(&queue_lock, self);
+    return NULL;
+}
+
+int main(void) {
+    monitor_init(&queue_lock);
+
+    JVMThread *c = jvm_thread_create("consumer", consumer);
+    JVMThread *p = jvm_thread_create("producer", producer);
+
+    pthread_join(c->pthread, NULL);
+    pthread_join(p->pthread, NULL);
+
+    printf("All done!\n");
     return 0;
 }
