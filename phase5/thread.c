@@ -273,5 +273,6 @@ int main(void) {
     pthread_join(p->pthread, NULL);
 
     printf("All done!\n");
+    thread_dump();
     return 0;
 }
