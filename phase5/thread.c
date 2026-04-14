@@ -15,6 +15,17 @@ typedef enum
     THREAD_TERMINATED
 } ThreadState;
 
+const char *state_to_string(ThreadState s) {
+    switch (s) {
+        case THREAD_NEW: return "THREAD_NEW";
+        case THREAD_RUNNABLE: return "THREAD_RUNNABLE";
+        case THREAD_BLOCKED: return "THREAD_BLOCKED";
+        case THREAD_WAITING: return "THREAD_WAITING";
+        case THREAD_TERMINATED: return "THREAD_TERMINATED";
+        default:                return "UNKNOWN";
+    }
+}
+
 typedef struct Monitor Monitor;
 typedef struct JVMThread JVMThread;
 
@@ -238,6 +249,18 @@ void* producer(void *arg) {
     monitor_unlock(&queue_lock, self);
     monitor_notify(&queue_lock, self);
     return NULL;
+}
+
+void thread_dump() {
+    printf("=== Thread Dump ===\n");
+    for (int i = 0; i < thread_count; i++) {
+        JVMThread *t = all_threads[i];
+        printf("\"%s\" id = %d state = %s\n", t->name, t->id, (t->state == THREAD_RUNNABLE) ? "running" : "waiting");
+        if (t->waiting_for != NULL) {
+        printf("  waiting for monitor\n");
+        }
+    }
+    printf("===================\n");
 }
 
 int main(void) {
