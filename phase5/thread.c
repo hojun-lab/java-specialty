@@ -3,6 +3,8 @@
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
+#define MAX_QUEUE   32
+#define MAX_WORKERS 8
 
 int thread_count = 0;
 
@@ -15,13 +17,18 @@ typedef enum
     THREAD_TERMINATED
 } ThreadState;
 
+typedef struct {
+    void *(*func)(void *); // 실행할 함수
+    void *arg;             // 함수에 넘길 인자
+} Task;
+
 const char *state_to_string(ThreadState s) {
     switch (s) {
-        case THREAD_NEW: return "THREAD_NEW";
-        case THREAD_RUNNABLE: return "THREAD_RUNNABLE";
-        case THREAD_BLOCKED: return "THREAD_BLOCKED";
-        case THREAD_WAITING: return "THREAD_WAITING";
-        case THREAD_TERMINATED: return "THREAD_TERMINATED";
+        case THREAD_NEW: return "NEW";
+        case THREAD_RUNNABLE: return "RUNNABLE";
+        case THREAD_BLOCKED: return "BLOCKED";
+        case THREAD_WAITING: return "WAITING";
+        case THREAD_TERMINATED: return "TERMINATED";
         default:                return "UNKNOWN";
     }
 }
@@ -47,6 +54,16 @@ struct JVMThread
     int id;
     Monitor *waiting_for;
 };
+
+typedef struct {
+    Task queue[MAX_QUEUE];
+    int queue_size;
+    JVMThread *workers[MAX_WORKERS];
+    int workers_count;
+    Monitor monitor;
+    int running;
+} ThreadPool;
+
 
 JVMThread *all_threads[64];
 
@@ -236,6 +253,7 @@ void* consumer(void *arg) {
 
     printf("[%s] got data! processing!\n", self->name);
     monitor_unlock(&queue_lock, self);
+    self->state = THREAD_TERMINATED;
     return NULL;
 }
 
@@ -248,14 +266,29 @@ void* producer(void *arg) {
     printf("[%s] data produced! notifying...\n", self->name);
     monitor_unlock(&queue_lock, self);
     monitor_notify(&queue_lock, self);
+    self->state = THREAD_TERMINATED;
     return NULL;
+}
+
+void threadpool_init(ThreadPool *pool, int worker_count) {
+    monitor_init(&pool->monitor);
+    pool->queue_size = 0;
+    pool->workers_count = worker_count;
+    pool->running = 1;
+}
+
+void *pool_worker(void *arg) {
+    ThreadPool *pool = (ThreadPool *)arg;
+    while (1) {
+
+    }
 }
 
 void thread_dump() {
     printf("=== Thread Dump ===\n");
     for (int i = 0; i < thread_count; i++) {
         JVMThread *t = all_threads[i];
-        printf("\"%s\" id = %d state = %s\n", t->name, t->id, (t->state == THREAD_RUNNABLE) ? "running" : "waiting");
+        printf("\"%s\" id = %d state = %s\n", t->name, t->id, state_to_string(t->state));
         if (t->waiting_for != NULL) {
         printf("  waiting for monitor\n");
         }
