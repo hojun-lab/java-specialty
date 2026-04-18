@@ -64,10 +64,14 @@ typedef struct {
     int running;
 } ThreadPool;
 
+typedef struct {
+    ThreadPool *pool;
+    JVMThread *self;
+} WorkerArg;
 
 JVMThread *all_threads[64];
 
-JVMThread *jvm_thread_create(const char *name, void *(*func)(void *))
+JVMThread *jvm_thread_create(const char *name, void *(*func)(void *), void *arg)
 {
     JVMThread *thread = malloc(sizeof(JVMThread));
     strcpy(thread->name, name);
@@ -77,7 +81,7 @@ JVMThread *jvm_thread_create(const char *name, void *(*func)(void *))
     thread->waiting_for = NULL;
     thread->state = THREAD_NEW;
 
-    pthread_create(&thread->pthread, NULL, func, thread);
+    pthread_create(&thread->pthread, NULL, func, arg);
     thread->state = THREAD_RUNNABLE;
 
     return thread;
@@ -105,13 +109,13 @@ void monitor_lock(Monitor *mon, JVMThread *thread)
 {
     printf("[%s] waiting for lock...\n", thread->name);
     thread->state = THREAD_BLOCKED;                      // 대기 상태
-    mon->waiting_threads[mon->waiting_count++] = thread; // 스레드 등록
+    // mon->waiting_threads[mon->waiting_count++] = thread; // 스레드 등록
 
     thread->waiting_for = mon;
     pthread_mutex_lock(&mon->mutex); // 대기 실행 로직
     thread->waiting_for = NULL;
 
-    mon->waiting_count--;            // 획득 했으니 대기 목록에서 제거
+    // mon->waiting_count--;            // 획득 했으니 대기 목록에서 제거
     thread->state = THREAD_RUNNABLE; // 획득
     mon->owner = thread;             // 주인 설정
     printf("[%s] acquired lock!\n", thread->name);
@@ -270,18 +274,72 @@ void* producer(void *arg) {
     return NULL;
 }
 
+void *pool_worker(void *arg) {
+    WorkerArg *warg = (WorkerArg *)arg;
+    ThreadPool *pool = warg->pool;
+
+    JVMThread *self = NULL;
+    pthread_t me = pthread_self();
+    for (int i = 0; i < thread_count; i++) {
+        if (pthread_equal(all_threads[i]->pthread, me)) {
+            self = all_threads[i];
+            break;
+        }
+    }
+    while (1) {
+        monitor_lock(&pool->monitor, self);
+
+        // 큐가 비어 있고 실행 중이면 -> 잠들기
+        while (pool->queue_size == 0 && pool->running) {
+            monitor_wait(&pool->monitor, self);
+        }
+
+        // running = 0 이 큐도 비면 -> 종료
+        if (!pool->running && pool->queue_size == 0) {
+            monitor_unlock(&pool->monitor, self);
+            break;
+        }
+
+        // 큐에서 Task 꺼내기
+        Task task = pool->queue[pool->queue_size - 1];
+        pool->queue_size--;
+
+        monitor_unlock(&pool->monitor, self);
+
+        task.func(task.arg);
+    }
+    return NULL;
+}
+
 void threadpool_init(ThreadPool *pool, int worker_count) {
     monitor_init(&pool->monitor);
     pool->queue_size = 0;
     pool->workers_count = worker_count;
     pool->running = 1;
+
+    for (int i = 0; i < worker_count; i++) {
+        char name[32];
+        sprintf(name, "worker-%d", i);
+
+        WorkerArg *warg = malloc(sizeof(WorkerArg));
+        warg->pool = pool;
+
+        pool->workers[i] = jvm_thread_create(name, pool_worker, warg);
+        warg->self = pool->workers[i];
+    }
 }
 
-void *pool_worker(void *arg) {
-    ThreadPool *pool = (ThreadPool *)arg;
-    while (1) {
+void threadpool_submit(ThreadPool *pool, void *(*func)(void *), void *arg) {
+    pthread_mutex_lock(&pool->monitor.mutex);
 
-    }
+    Task t;
+    t.func = func;
+    t.arg = arg;
+    pool->queue[pool->queue_size] = t;
+    pool->queue_size++;
+
+    pthread_mutex_unlock(&pool->monitor.mutex);
+    pthread_cond_signal(&pool->monitor.cond);
 }
 
 void thread_dump() {
@@ -296,16 +354,33 @@ void thread_dump() {
     printf("===================\n");
 }
 
+void *my_task(void *arg) {
+    int num = *(int *)arg;
+    printf("Task %d 실행 중\n", num);
+    sleep(1);
+    printf("Task %d 완료\n", num);
+    return NULL;
+}
+
 int main(void) {
-    monitor_init(&queue_lock);
+    // monitor_init(&queue_lock);
+    //
+    // JVMThread *c = jvm_thread_create("consumer", consumer);
+    // JVMThread *p = jvm_thread_create("producer", producer);
+    //
+    // pthread_join(c->pthread, NULL);
+    // pthread_join(p->pthread, NULL);
+    //
+    // printf("All done!\n");
+    ThreadPool pool;
+    threadpool_init(&pool, 3);
 
-    JVMThread *c = jvm_thread_create("consumer", consumer);
-    JVMThread *p = jvm_thread_create("producer", producer);
+    int arg[5] = { 1, 2, 3, 4, 5 };
+    for (int i = 0; i < 5; i++) {
+        threadpool_submit(&pool, my_task, &arg[i]);
+    }
 
-    pthread_join(c->pthread, NULL);
-    pthread_join(p->pthread, NULL);
-
-    printf("All done!\n");
+    sleep(5);
     thread_dump();
     return 0;
 }
