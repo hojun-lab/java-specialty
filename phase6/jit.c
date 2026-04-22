@@ -1,6 +1,8 @@
 #define COMPILE_THRESHOLD 5
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 typedef struct {
     char name[64];
@@ -22,6 +24,25 @@ void method_call(Method *m) {
         m->is_hot ? "JIT" : "interpreted");
 }
 
+void *alloc_executable(int size) {
+    void *mem = mmap(
+        NULL,                                   // 주소는 OS가 결정
+        size,                                   // 크기
+        PROT_READ | PROT_WRITE,                 // 읽기 + 쓰기
+        MAP_PRIVATE | MAP_ANON,                 // 파일 없이 메모리만
+        -1, 0
+    );
+    if (mem == MAP_FAILED) {
+        perror("mmap failed");
+        return NULL;
+    }
+    return mem;
+}
+
+void make_executable(void *mem, int size) {
+    mprotect(mem, size, PROT_READ | PROT_EXEC);
+}
+
 int main(void) {
     Method m;
     strcpy(m.name, "add");
@@ -31,6 +52,9 @@ int main(void) {
     for (int i = 0; i < 7; i++) {
         method_call(&m);
     }
+
+    void *mem = alloc_executable(4096);
+    printf("실행 가능한 메모리 주소 : %p\n", mem);
 
     return 0;
 }
