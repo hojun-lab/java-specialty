@@ -56,5 +56,17 @@ int main(void) {
     void *mem = alloc_executable(4096);
     printf("실행 가능한 메모리 주소 : %p\n", mem);
 
+    unsigned char code[] = {
+        0x00, 0x00, 0x01, 0x8B,
+        0xC0, 0x03, 0x5F, 0xD6
+    };
+
+    memcpy(mem, code, sizeof(code));
+    make_executable(mem, 4096);
+
+    int (*jit_add)(int, int) = (int (*)(int, int)) mem;
+    int result = jit_add(3, 4);
+    printf("JIT add(3, 4) = %d\n", result);
+
     return 0;
 }
