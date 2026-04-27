@@ -66,16 +66,63 @@ Object *heap_alloc(Heap *heap, int size)
     return obj;
 }
 
+void simulate_oom(Heap *heap) {
+    printf("=== OOM 시뮬레이션 ===\n");
+    int count = 0;
+    while (1) {
+        Object *obj = heap_alloc(heap, 64);
+        if (obj == NULL) {
+            printf("OOM! objects = %d heap_alloc failed\n", count);
+            printf("Heap usage: %dB / %dB\n", heap->used, heap->total_size);
+            break;
+        }
+        count++;
+    }
+}
+
+void simulate_leak(Heap *heap) {
+    printf("=== 메모리 누수 시뮬레이션 ===\n");
+
+    Object *cache[100];     // 누수의 원인 -> 참조를 계속 붙잡음
+    int cache_count = 0;
+
+    for (int i = 0; i < 5; i++) {
+        Object *obj = heap_alloc(heap, 32);
+        cache[cache_count++] = obj;     // <- GC 해도 살아남
+        printf("할당 : [%p] 누적=%dB\n", (void*)obj, heap->used);
+    }
+
+    printf("GC 돌려도 cache[]가 참조 중 -> 수집 안 됨\n");
+    printf("힙 사용량: %dB / %dB\n", heap->used, heap->total_size);
+}
+
 int main(void) {
     Heap heap;
     heap_init(&heap, 1024);
 
-    heap_alloc(&heap, 32);
-    heap_alloc(&heap, 64);
-    heap_alloc(&heap, 16);
+    // heap_alloc(&heap, 32);
+    // heap_alloc(&heap, 64);
+    // heap_alloc(&heap, 16);
+    //
+    // printf("=== Heap Dump ===\n");
+    // heap_dump(&heap);
+    // printf("=================\n");
 
-    printf("=== Heap Dump ===\n");
+    // simulate_oom(&heap);
+    //
+    // printf("===힙 덤프===\n");
+    // heap_dump(&heap);
+
+    // OOM 시뮬레이션
+    simulate_oom(&heap);
     heap_dump(&heap);
-    printf("=================\n");
+
+    printf("\n");
+
+    Heap heap2;
+    heap_init(&heap2, 1024);
+    simulate_leak(&heap2);
+    heap_dump(&heap2);
+
     return 0;
 }
