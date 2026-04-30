@@ -96,6 +96,45 @@ void simulate_leak(Heap *heap) {
     printf("힙 사용량: %dB / %dB\n", heap->used, heap->total_size);
 }
 
+void diagnose(Heap *heap) {
+    printf("\n=== 진단 시작===\n");
+
+    // 1. 힙 사용률 체크
+    int usage_percent = (heap->used * 100) / heap->total_size;
+    printf("[MONITOR] 힙 사용률 : %d%%\n", usage_percent);
+
+    if (usage_percent >= 90) {
+        printf("  ⚠ 경고: 힙 90%% 초과\n");
+        printf("  → 원인: 메모리 누수 또는 힙 크기 부족\n");
+        printf("  → 확인: heap_dump()로 객체 분포 확인\n");
+        printf("  → 해결: -Xmx 증가 또는 누수 코드 수정\n");
+    }
+
+    // 2. 객체 분포 분석
+    char *ptr = heap->start;
+    int obj_count = 0;
+    int old_objects = 0;    // age >= 3
+
+    while (ptr < heap->alloc_ptr) {
+        Object *obj = (Object *)ptr;
+        obj_count++;
+        if (obj->gc_age >= 3) {
+            old_objects++;
+        }
+        ptr += obj->size;
+    }
+
+    printf("객체 총 %d개, Old 승격 %d개\n", obj_count, old_objects);
+
+    if (old_objects > obj_count / 2) {
+        printf("  ⚠ 경고: Old Gen 객체 비율 높음\n");
+        printf("  → 원인: 객체 수명이 길거나 누수 의심\n");
+        printf("  → 확인: jmap -histo로 클래스별 집계\n");
+    }
+
+    printf("=== 진단 완료 ===\n");
+}
+
 int main(void) {
     Heap heap;
     heap_init(&heap, 1024);
@@ -116,6 +155,7 @@ int main(void) {
     // OOM 시뮬레이션
     simulate_oom(&heap);
     heap_dump(&heap);
+    diagnose(&heap);
 
     printf("\n");
 
@@ -123,6 +163,7 @@ int main(void) {
     heap_init(&heap2, 1024);
     simulate_leak(&heap2);
     heap_dump(&heap2);
+    diagnose(&heap2);
 
     return 0;
 }
